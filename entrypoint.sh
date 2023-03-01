@@ -10,6 +10,7 @@ SHFMT_DISABLE=0
 SH_CHECKER_COMMENT=0
 CHECKBASHISMS_ENABLE=0
 SH_CHECKER_ONLY_DIFF=0
+SH_CHECKER_ANNOTATIONS=0
 
 shopt -s nocasematch
 
@@ -31,6 +32,14 @@ fi
 
 if [[ "${INPUT_SH_CHECKER_ONLY_DIFF}" =~ ^(1|true|on|yes)$ ]]; then
 	SH_CHECKER_ONLY_DIFF=1
+fi
+
+if [[ "${INPUT_SH_CHECKER_ANNOTATIONS}" =~ ^(1|true|on|yes)$ ]]; then
+	SH_CHECKER_ANNOTATIONS=1
+	if ((SH_CHECKER_COMMENT == 1)); then
+		echo "Can't enable PR annotations comments at the same time."
+		exit 1
+	fi
 fi
 
 if ((SHELLCHECK_DISABLE == 1 && SHFMT_DISABLE == 1 && CHECKBASHISMS_ENABLE != 1)); then
@@ -142,6 +151,14 @@ exit_code=0
 shellcheck_error='shellcheck checking is disabled.'
 shfmt_error='shfmt checking is disabled.'
 
+if ((SH_CHECKER_ANNOTATIONS == 1)); then
+	if [[ "${SHELLCHECK_OPTS}" =~ --format ]]; then
+		echo "The '--format' option is not supported in SHELLCHECK_OPTS when using annotations."
+		exit -1
+	fi
+	SHELLCHECK_OPTS="${SHELLCHECK_OPTS} --format json1"
+fi
+
 if ((SHELLCHECK_DISABLE != 1)); then
 	printf "Validating %d shell script(s) using 'shellcheck %s':\\n" "${#sh_files[@]}" "$SHELLCHECK_OPTS"
 	IFS=$' \t\n' read -d '' -ra args <<<"$SHELLCHECK_OPTS"
@@ -152,6 +169,14 @@ if ((SHELLCHECK_DISABLE != 1)); then
 	else
 		# .shellcheck returns 0-4: https://github.com/koalaman/shellcheck/blob/dff8f9492a153b4ad8ac7d085136ce532e8ea081/shellcheck.hs#L191
 		exit_code=$shellcheck_code
+		# Split shellcheck output into lines and format each line as a GitHub annotation
+		if ((SH_CHECKER_ANNOTATIONS == 1)); then
+			jq_transform='::\(.level | ascii_upcase) file=\(.file),line=\(.line),endLine=\(.endLine),col=\(.column),endColumn=\(.endColumn),title=ShellCheck \(.level)::\(.message) (https://www.shellcheck.net/wiki/SC\(.code))'
+			echo "${shellcheck_output}" |
+				sed -E 's/"level":"(style|info)"/"level":"notice"/g' |
+				jq -r ".comments[] | \"${jq_transform}\""
+			  shellcheck_output="$(echo "${shellcheck_output}" | jq .)"
+		fi
 		IFS= read -r -d '' shellcheck_error <<EOF
 
 'shellcheck $SHELLCHECK_OPTS' returned error $shellcheck_code finding the following syntactical issues:
